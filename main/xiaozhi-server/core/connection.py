@@ -181,6 +181,15 @@ class ConnectionHandler:
             # 认证通过,继续处理
             self.websocket = ws
             self.device_id = self.headers.get("device-id", None)
+            
+            # 初始化session_id, 如果调用的是agent，则连接agent获取session_id
+            try:
+                self.session_id = self.llm.new_session()
+                self.logger.bind(tag=TAG).info(f"new connect, new session_id, agent: {self.session_id}")
+            except:
+                self.session_id = str(uuid.uuid4())
+                self.logger.bind(tag=TAG).info(f"new connect, new session_id, uuid4: {self.session_id}")
+            
 
             # 启动超时检查任务
             self.timeout_task = asyncio.create_task(self._check_timeout())
@@ -209,16 +218,21 @@ class ConnectionHandler:
                 async for message in self.websocket:
                     await self._route_message(message)
             except websockets.exceptions.ConnectionClosed:
-                self.logger.bind(tag=TAG).info("客户端断开连接")
+                self.logger.bind(tag=TAG).info("[{self.session_id}] 客户端断开连接")
 
         except AuthenticationError as e:
-            self.logger.bind(tag=TAG).error(f"Authentication failed: {str(e)}")
+            self.logger.bind(tag=TAG).error(f"[{self.session_id}] Authentication failed: {str(e)}")
             return
         except Exception as e:
             stack_trace = traceback.format_exc()
-            self.logger.bind(tag=TAG).error(f"Connection error: {str(e)}-{stack_trace}")
+            self.logger.bind(tag=TAG).error(f"[{self.session_id}] Connection error: {str(e)}-{stack_trace}")
             return
         finally:
+            self.logger.bind(tag=TAG).info(f"[{self.session_id}] Connection handler finished, remove session_id: {self.session_id}")
+            try:
+                self.llm.delete_session(self.session_id)
+            except:
+                pass
             await self._save_and_close(ws)
 
     async def _save_and_close(self, ws):
@@ -235,14 +249,14 @@ class ConnectionHandler:
                             self.memory.save_memory(self.dialogue.dialogue)
                         )
                     except Exception as e:
-                        self.logger.bind(tag=TAG).error(f"保存记忆失败: {e}")
+                        self.logger.bind(tag=TAG).error(f"[{self.session_id}] 保存记忆失败: {e}")
                     finally:
                         loop.close()
 
                 # 启动线程保存记忆，不等待完成
                 threading.Thread(target=save_memory_task, daemon=True).start()
         except Exception as e:
-            self.logger.bind(tag=TAG).error(f"保存记忆失败: {e}")
+            self.logger.bind(tag=TAG).error(f"[{self.session_id}] 保存记忆失败: {e}")
         finally:
             # 立即关闭连接，不等待记忆保存完成
             await self.close(ws)
@@ -267,7 +281,7 @@ class ConnectionHandler:
         """处理服务器重启请求"""
         try:
 
-            self.logger.bind(tag=TAG).info("收到服务器重启指令，准备执行...")
+            self.logger.bind(tag=TAG).info(f"[{self.session_id}] 收到服务器重启指令，准备执行...")
 
             # 发送确认响应
             await self.websocket.send(
@@ -284,7 +298,7 @@ class ConnectionHandler:
             def restart_server():
                 """实际执行重启的方法"""
                 time.sleep(1)
-                self.logger.bind(tag=TAG).info("执行服务器重启...")
+                self.logger.bind(tag=TAG).info(f"[{self.session_id}] 执行服务器重启...")
                 subprocess.Popen(
                     [sys.executable, "app.py"],
                     stdin=sys.stdin,
@@ -298,7 +312,7 @@ class ConnectionHandler:
             threading.Thread(target=restart_server, daemon=True).start()
 
         except Exception as e:
-            self.logger.bind(tag=TAG).error(f"重启失败: {str(e)}")
+            self.logger.bind(tag=TAG).error(f"[{self.session_id}] 重启失败: {str(e)}")
             await self.websocket.send(
                 json.dumps(
                     {
@@ -315,7 +329,7 @@ class ConnectionHandler:
             self.prompt = self.config["prompt"]
             self.change_system_prompt(self.prompt)
             self.logger.bind(tag=TAG).info(
-                f"初始化组件: prompt成功 {self.prompt[:50]}..."
+                f"[{self.session_id}] 初始化组件: prompt成功 {self.prompt[:50]}..."
             )
 
         """初始化本地组件"""
@@ -341,7 +355,7 @@ class ConnectionHandler:
                 target=self._report_worker, daemon=True
             )
             self.report_thread.start()
-            self.logger.bind(tag=TAG).info("TTS上报线程已启动")
+            self.logger.bind(tag=TAG).info(f"[{self.session_id}] TTS上报线程已启动")
 
     def _initialize_private_config(self):
         """如果是从配置文件获取，则进行二次实例化"""
@@ -357,7 +371,7 @@ class ConnectionHandler:
             )
             private_config["delete_audio"] = bool(self.config.get("delete_audio", True))
             self.logger.bind(tag=TAG).info(
-                f"{time.time() - begin_time} 秒，获取差异化配置成功: {json.dumps(filter_sensitive_info(private_config), ensure_ascii=False)}"
+                f"[{self.session_id}] {time.time() - begin_time} 秒，获取差异化配置成功: {json.dumps(filter_sensitive_info(private_config), ensure_ascii=False)}"
             )
         except DeviceNotFoundException as e:
             self.need_bind = True
@@ -368,7 +382,7 @@ class ConnectionHandler:
             private_config = {}
         except Exception as e:
             self.need_bind = True
-            self.logger.bind(tag=TAG).error(f"获取差异化配置失败: {e}")
+            self.logger.bind(tag=TAG).error(f"[{self.session_id}] 获取差异化配置失败: {e}")
             private_config = {}
 
         init_llm, init_tts, init_memory, init_intent = (
@@ -425,7 +439,7 @@ class ConnectionHandler:
                 init_intent,
             )
         except Exception as e:
-            self.logger.bind(tag=TAG).error(f"初始化组件失败: {e}")
+            self.logger.bind(tag=TAG).error(f"[{self.session_id}] 初始化组件失败: {e}")
             modules = {}
         if modules.get("tts", None) is not None:
             self.tts = modules["tts"]
@@ -481,13 +495,13 @@ class ConnectionHandler:
                     intent_llm_type, intent_llm_config
                 )
                 self.logger.bind(tag=TAG).info(
-                    f"为意图识别创建了专用LLM: {intent_llm_name}, 类型: {intent_llm_type}"
+                    f"[{self.session_id}] 为意图识别创建了专用LLM: {intent_llm_name}, 类型: {intent_llm_type}"
                 )
                 self.intent.set_llm(intent_llm)
             else:
                 # 否则使用主LLM
                 self.intent.set_llm(self.llm)
-                self.logger.bind(tag=TAG).info("使用主LLM作为意图识别模型")
+                self.logger.bind(tag=TAG).info(f"[{self.session_id}] 使用主LLM作为意图识别模型")
 
         """加载插件"""
         self.func_handler = FunctionHandler(self)
@@ -518,12 +532,12 @@ class ConnectionHandler:
                 )
                 memory_str = future.result()
 
-            self.logger.bind(tag=TAG).debug(f"记忆内容: {memory_str}")
+            self.logger.bind(tag=TAG).debug(f"[{self.session_id}] 记忆内容: {memory_str}")
             llm_responses = self.llm.response(
                 self.session_id, self.dialogue.get_llm_dialogue_with_memory(memory_str)
             )
         except Exception as e:
-            self.logger.bind(tag=TAG).error(f"LLM 处理出错 {query}: {e}")
+            self.logger.bind(tag=TAG).error(f"[{self.session_id}] LLM 处理出错 {query}: {e}")
             return None
 
         self.llm_finish_task = False
@@ -620,7 +634,7 @@ class ConnectionHandler:
                 functions=functions,
             )
         except Exception as e:
-            self.logger.bind(tag=TAG).error(f"LLM 处理出错 {query}: {e}")
+            self.logger.bind(tag=TAG).error(f"[{self.session_id}] LLM 处理出错 {query}: {e}")
             return None
 
         self.llm_finish_task = False
@@ -646,20 +660,33 @@ class ConnectionHandler:
                 # print("content_arguments", content_arguments)
                 tool_call_flag = True
 
-            if tools_call is not None:
-                tool_call_flag = True
-                if tools_call[0].id is not None:
-                    function_id = tools_call[0].id
-                if tools_call[0].function.name is not None:
-                    function_name = tools_call[0].function.name
-                if tools_call[0].function.arguments is not None:
-                    function_arguments += tools_call[0].function.arguments
+            if tools_call is not None and len(tools_call) > 0:
+                # tool_call_flag = True
+                # if tools_call[0].id is not None:
+                #     function_id = tools_call[0].id
+                # if tools_call[0].function.name is not None:
+                #     function_name = tools_call[0].function.name
+                # if tools_call[0].function.arguments is not None:
+                #     function_arguments += tools_call[0].function.arguments
+                try:
+                    self.logger.bind(tag=TAG).info(f"[{self.session_id}] chat_with_function_calling, tools_call: {tools_call}")
+                    obj = tools_call[0].get("function", "")
+                    tool_call_flag = True
+                    function_call_datas.append({
+                        "name": obj.get("name", ""),
+                        "id": obj.get("id", str(uuid.uuid4().hex)),
+                        "arguments": obj.get("arguments", {})
+                    })
+                    self.logger.bind(tag=TAG).info(f"[{self.session_id}] tools_call: function_id: {function_id}, function_name: {function_name}, function_arguments: {function_arguments}")
+                except Exception as e:
+                    self.logger.bind(tag=TAG).error(f"[{self.session_id}] tools_call error: {e}")
 
             if content is not None and len(content) > 0:
                 if not tool_call_flag:
                     response_message.append(content)
 
                     if self.client_abort:
+                        self.logger.bind(tag=TAG).info(f"[{self.session_id}] client_abort,  break")
                         break
 
                     end_time = time.time()
@@ -700,39 +727,10 @@ class ConnectionHandler:
                             processed_chars += len(segment_text_raw)
 
         # 处理function call
-        if tool_call_flag:
-            bHasError = False
-            if function_id is None:
-                a = extract_json_from_string(content_arguments)
-                if a is not None:
-                    try:
-                        content_arguments_json = json.loads(a)
-                        function_name = content_arguments_json["name"]
-                        function_arguments = json.dumps(
-                            content_arguments_json["arguments"], ensure_ascii=False
-                        )
-                        function_id = str(uuid.uuid4().hex)
-                    except Exception as e:
-                        bHasError = True
-                        response_message.append(a)
-                else:
-                    bHasError = True
-                    response_message.append(content_arguments)
-                if bHasError:
-                    self.logger.bind(tag=TAG).error(
-                        f"function call error: {content_arguments}"
-                    )
-            if not bHasError:
+        if tool_call_flag and len(function_call_datas)>0:
+            for function_call_data in function_call_datas:
                 response_message.clear()
-                self.logger.bind(tag=TAG).debug(
-                    f"function_name={function_name}, function_id={function_id}, function_arguments={function_arguments}"
-                )
-                function_call_data = {
-                    "name": function_name,
-                    "id": function_id,
-                    "arguments": function_arguments,
-                }
-
+                self.logger.bind(tag=TAG).info(f"[{self.session_id}] function_call_data : {function_call_data}")
                 # 处理MCP工具调用
                 if self.mcp_manager.is_mcp_tool(function_name):
                     result = self._handle_mcp_tool_call(function_call_data)
@@ -741,7 +739,9 @@ class ConnectionHandler:
                     result = self.func_handler.handle_llm_function_call(
                         self, function_call_data
                     )
-                self._handle_function_result(result, function_call_data, text_index + 1)
+                self.logger.bind(tag=TAG).info(f"[{self.session_id}] handle_llm_function_call responce : {result}")
+                # self._handle_function_result(result, function_call_data, text_index + 1)
+                response_message.append(result.result)
 
         # 处理最后剩余的文本
         full_text = "".join(response_message)
@@ -878,20 +878,20 @@ class ConnectionHandler:
                 text = None
                 audio_datas, tts_file = [], None
                 try:
-                    self.logger.bind(tag=TAG).debug("正在处理TTS任务...")
+                    self.logger.bind(tag=TAG).debug(f"[{self.session_id}] 正在处理TTS任务...")
                     tts_timeout = int(self.config.get("tts_timeout", 10))
                     tts_file, text, _ = future.result(timeout=tts_timeout)
                     if text is None or len(text) <= 0:
                         self.logger.bind(tag=TAG).error(
-                            f"TTS出错：{text_index}: tts text is empty"
+                            f"[{self.session_id}] TTS出错：{text_index}: tts text is empty"
                         )
                     elif tts_file is None:
                         self.logger.bind(tag=TAG).error(
-                            f"TTS出错： file is empty: {text_index}: {text}"
+                            f"[{self.session_id}] TTS出错： file is empty: {text_index}: {text}"
                         )
                     else:
                         self.logger.bind(tag=TAG).debug(
-                            f"TTS生成：文件路径: {tts_file}"
+                            f"[{self.session_id}] TTS生成：文件路径: {tts_file}"
                         )
                         if os.path.exists(tts_file):
                             if self.audio_format == "pcm":
@@ -902,12 +902,12 @@ class ConnectionHandler:
                             enqueue_tts_report(self, text, audio_datas)
                         else:
                             self.logger.bind(tag=TAG).error(
-                                f"TTS出错：文件不存在{tts_file}"
+                                f"[{self.session_id}] TTS出错：文件不存在{tts_file}"
                             )
                 except TimeoutError:
-                    self.logger.bind(tag=TAG).error("TTS超时")
+                    self.logger.bind(tag=TAG).error(f"[{self.session_id}] TTS超时")
                 except Exception as e:
-                    self.logger.bind(tag=TAG).error(f"TTS出错: {e}")
+                    self.logger.bind(tag=TAG).error(f"[{self.session_id}] TTS出错: {e}")
                 if not self.client_abort:
                     # 如果没有中途打断就发送语音
                     self.audio_play_queue.put((audio_datas, text, text_index))
@@ -918,7 +918,7 @@ class ConnectionHandler:
                 ):
                     os.remove(tts_file)
             except Exception as e:
-                self.logger.bind(tag=TAG).error(f"TTS任务处理错误: {e}")
+                self.logger.bind(tag=TAG).error(f"[{self.session_id}] TTS任务处理错误: {e}")
                 self.clearSpeakStatus()
                 asyncio.run_coroutine_threadsafe(
                     self.websocket.send(
@@ -970,39 +970,39 @@ class ConnectionHandler:
                     # 执行上报（传入二进制数据）
                     report(self, type, text, audio_data)
                 except Exception as e:
-                    self.logger.bind(tag=TAG).error(f"聊天记录上报线程异常: {e}")
+                    self.logger.bind(tag=TAG).error(f"[{self.session_id}] 聊天记录上报线程异常: {e}")
                 finally:
                     # 标记任务完成
                     self.report_queue.task_done()
             except queue.Empty:
                 continue
             except Exception as e:
-                self.logger.bind(tag=TAG).error(f"聊天记录上报工作线程异常: {e}")
+                self.logger.bind(tag=TAG).error(f"[{self.session_id}] 聊天记录上报工作线程异常: {e}")
 
-        self.logger.bind(tag=TAG).info("聊天记录上报线程已退出")
+        self.logger.bind(tag=TAG).info(f"[{self.session_id}] 聊天记录上报线程已退出")
 
     def speak_and_play(self, text, text_index=0):
         if text is None or len(text) <= 0:
-            self.logger.bind(tag=TAG).info(f"无需tts转换，query为空，{text}")
+            self.logger.bind(tag=TAG).info(f"[{self.session_id}] 无需tts转换，query为空，{text}")
             return None, text, text_index
         tts_file = self.tts.to_tts(text)
         if tts_file is None:
-            self.logger.bind(tag=TAG).error(f"tts转换失败，{text}")
+            self.logger.bind(tag=TAG).error(f"[{self.session_id}] tts转换失败，{text}")
             return None, text, text_index
-        self.logger.bind(tag=TAG).debug(f"TTS 文件生成完毕: {tts_file}")
+        self.logger.bind(tag=TAG).debug(f"[{self.session_id}] TTS 文件生成完毕: {tts_file}")
         if self.max_output_size > 0:
             add_device_output(self.headers.get("device-id"), len(text))
         return tts_file, text, text_index
 
     def clearSpeakStatus(self):
-        self.logger.bind(tag=TAG).debug(f"清除服务端讲话状态")
+        self.logger.bind(tag=TAG).debug(f"[{self.session_id}] 清除服务端讲话状态")
         self.asr_server_receive = True
         self.tts_last_text_index = -1
         self.tts_first_text_index = -1
 
     def recode_first_last_text(self, text, text_index=0):
         if self.tts_first_text_index == -1:
-            self.logger.bind(tag=TAG).info(f"大模型说出第一句话: {text}")
+            self.logger.bind(tag=TAG).info(f"[{self.session_id}] 大模型说出第一句话: {text}")
             self.tts_first_text_index = text_index
         self.tts_last_text_index = text_index
 
@@ -1036,12 +1036,12 @@ class ConnectionHandler:
             self.executor.shutdown(wait=False)
             self.executor = None
 
-        self.logger.bind(tag=TAG).info("连接资源已释放")
+        self.logger.bind(tag=TAG).info(f"[{self.session_id}] 连接资源已释放")
 
     def clear_queues(self):
         """清空所有任务队列"""
         self.logger.bind(tag=TAG).debug(
-            f"开始清理: TTS队列大小={self.tts_queue.qsize()}, 音频队列大小={self.audio_play_queue.qsize()}"
+            f"[{self.session_id}] 开始清理: TTS队列大小={self.tts_queue.qsize()}, 音频队列大小={self.audio_play_queue.qsize()}"
         )
 
         # 使用非阻塞方式清空队列
@@ -1055,7 +1055,7 @@ class ConnectionHandler:
                     break
 
         self.logger.bind(tag=TAG).debug(
-            f"清理结束: TTS队列大小={self.tts_queue.qsize()}, 音频队列大小={self.audio_play_queue.qsize()}"
+            f"[{self.session_id}] 清理结束: TTS队列大小={self.tts_queue.qsize()}, 音频队列大小={self.audio_play_queue.qsize()}"
         )
 
     def reset_vad_states(self):
@@ -1074,7 +1074,7 @@ class ConnectionHandler:
             # After chat is complete, close the connection
             self.close_after_chat = True
         except Exception as e:
-            self.logger.bind(tag=TAG).error(f"Chat and close error: {str(e)}")
+            self.logger.bind(tag=TAG).error(f"[{self.session_id}] Chat and close error: {str(e)}")
 
     async def _check_timeout(self):
         """检查连接超时"""
@@ -1082,11 +1082,11 @@ class ConnectionHandler:
             while not self.stop_event.is_set():
                 await asyncio.sleep(self.timeout_seconds)
                 if not self.stop_event.is_set():
-                    self.logger.bind(tag=TAG).info("连接超时，准备关闭")
+                    self.logger.bind(tag=TAG).info(f"[{self.session_id}] 连接超时，准备关闭")
                     await self.close(self.websocket)
                     break
         except Exception as e:
-            self.logger.bind(tag=TAG).error(f"超时检查任务出错: {e}")
+            self.logger.bind(tag=TAG).error(f"[{self.session_id}] 超时检查任务出错: {e}")
 
 
 def filter_sensitive_info(config: dict) -> dict:
