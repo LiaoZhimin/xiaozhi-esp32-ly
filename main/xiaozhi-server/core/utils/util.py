@@ -956,3 +956,15 @@ def check_asr_update(before_config, new_config):
     )
     update_asr = current_asr_type != new_asr_type
     return update_asr
+
+
+def text_generator(user_text)->[]:
+    '''
+    按多个符号拆分句子
+    。！？；
+    ''' 
+    pattern = r'[。！？；\n]'
+    text_list = re.split(pattern, user_text)
+    for text in text_list:
+        if text.strip():
+            yield text

@@ -517,13 +517,39 @@ class ConnectionHandler:
         # 更新系统prompt至上下文
         self.dialogue.update_system_message(self.prompt)
 
+
+    def ly_append_tts_queue(self, sentence):
+        ''' - 将句子按符号分割，追加到队列中 '''
+        self.logger.bind(tag=TAG).info(f"[{self.session_id}] ly_append_tts_queue begin: {sentence}")
+        texts = text_generator(sentence)
+        for text_index,segment_text in enumerate(texts):
+            segment_text = get_string_no_punctuation_or_emoji(segment_text) # 去除标点符号和表情
+            future = self.executor.submit(
+                self.speak_and_play, segment_text, text_index
+            )
+            self.tts_queue.put(future)
+            self.logger.bind(tag=TAG).info(f"[{self.session_id}] ly_append_tts_queue: index:{text_index} segment_text: {segment_text}")
+    
+    
+    def ly_clear_tts_queue(self):
+        ''' - 清空上一次对话的语音和文本队列 '''
+        # 清除就得队列内容
+        self.tts_queue.queue.clear()
+        self.audio_play_queue.queue.clear()
+    
+    
+    def ly_check_audio_finish_queue(self):
+        ''' - 检查是否有文本队列未播放完成, 用于校验是否需要发送停止播放指令 '''
+        return self.tts_queue.empty() and self.audio_play_queue.empty()
+    
+    
     def chat(self, query):
-
         self.dialogue.put(Message(role="user", content=query))
-
         response_message = []
         processed_chars = 0  # 跟踪已处理的字符位置
         try:
+            # 清空上一次对话的语音和文本队列
+            self.ly_clear_tts_queue() 
             # 使用带记忆的对话
             memory_str = None
             if self.memory is not None:
@@ -550,49 +576,13 @@ class ConnectionHandler:
             # 合并当前全部文本并处理未分割部分
             full_text = "".join(response_message)
             current_text = full_text[processed_chars:]  # 从未处理的位置开始
-
-            # 查找最后一个有效标点
-            punctuations = ("。", ".", "？", "?", "！", "!", "；", ";", "：")
-            last_punct_pos = -1
-            number_flag = True
-            for punct in punctuations:
-                pos = current_text.rfind(punct)
-                prev_char = current_text[pos - 1] if pos - 1 >= 0 else ""
-                # 如果.前面是数字统一判断为小数
-                if prev_char.isdigit() and punct == ".":
-                    number_flag = False
-                if pos > last_punct_pos and number_flag:
-                    last_punct_pos = pos
-
-            # 找到分割点则处理
-            if last_punct_pos != -1:
-                segment_text_raw = current_text[: last_punct_pos + 1]
-                segment_text = get_string_no_punctuation_or_emoji(segment_text_raw)
-                if segment_text:
-                    # 强制设置空字符，测试TTS出错返回语音的健壮性
-                    # if text_index % 2 == 0:
-                    #     segment_text = " "
-                    text_index += 1
-                    self.recode_first_last_text(segment_text, text_index)
-                    future = self.executor.submit(
-                        self.speak_and_play, segment_text, text_index
-                    )
-                    self.tts_queue.put((future, text_index))
-                    processed_chars += len(segment_text_raw)  # 更新已处理字符位置
+            self.ly_append_tts_queue(content) # 将句子添加到队列中
 
         # 处理最后剩余的文本
         full_text = "".join(response_message)
         remaining_text = full_text[processed_chars:]
-        if remaining_text:
-            segment_text = get_string_no_punctuation_or_emoji(remaining_text)
-            if segment_text:
-                text_index += 1
-                self.recode_first_last_text(segment_text, text_index)
-                future = self.executor.submit(
-                    self.speak_and_play, segment_text, text_index
-                )
-                self.tts_queue.put((future, text_index))
-
+        self.ly_append_tts_queue(remaining_text) # 将句子添加到队列中
+        
         self.llm_finish_task = True
         self.dialogue.put(Message(role="assistant", content="".join(response_message)))
         self.logger.bind(tag=TAG).debug(
@@ -657,17 +647,9 @@ class ConnectionHandler:
                 content_arguments += content
 
             if not tool_call_flag and content_arguments.startswith("<tool_call>"):
-                # print("content_arguments", content_arguments)
                 tool_call_flag = True
 
-            if tools_call is not None and len(tools_call) > 0:
-                # tool_call_flag = True
-                # if tools_call[0].id is not None:
-                #     function_id = tools_call[0].id
-                # if tools_call[0].function.name is not None:
-                #     function_name = tools_call[0].function.name
-                # if tools_call[0].function.arguments is not None:
-                #     function_arguments += tools_call[0].function.arguments
+            if tools_call is not None and len(tools_call) > 0: 
                 try:
                     self.logger.bind(tag=TAG).info(f"[{self.session_id}] chat_with_function_calling, tools_call: {tools_call}")
                     obj = tools_call[0].get("function", "")
@@ -695,36 +677,7 @@ class ConnectionHandler:
                     # 处理文本分段和TTS逻辑
                     # 合并当前全部文本并处理未分割部分
                     full_text = "".join(response_message)
-                    current_text = full_text[processed_chars:]  # 从未处理的位置开始
-
-                    # 查找最后一个有效标点
-                    punctuations = ("。", ".", "？", "?", "！", "!", "；", ";", "：")
-                    last_punct_pos = -1
-                    number_flag = True
-                    for punct in punctuations:
-                        pos = current_text.rfind(punct)
-                        prev_char = current_text[pos - 1] if pos - 1 >= 0 else ""
-                        # 如果.前面是数字统一判断为小数
-                        if prev_char.isdigit() and punct == ".":
-                            number_flag = False
-                        if pos > last_punct_pos and number_flag:
-                            last_punct_pos = pos
-
-                    # 找到分割点则处理
-                    if last_punct_pos != -1:
-                        segment_text_raw = current_text[: last_punct_pos + 1]
-                        segment_text = get_string_no_punctuation_or_emoji(
-                            segment_text_raw
-                        )
-                        if segment_text:
-                            text_index += 1
-                            self.recode_first_last_text(segment_text, text_index)
-                            future = self.executor.submit(
-                                self.speak_and_play, segment_text, text_index
-                            )
-                            self.tts_queue.put((future, text_index))
-                            # 更新已处理字符位置
-                            processed_chars += len(segment_text_raw)
+                    self.ly_append_tts_queue(content) # 将句子添加到队列中
 
         # 处理function call
         if tool_call_flag and len(function_call_datas)>0:
@@ -742,19 +695,10 @@ class ConnectionHandler:
                 self.logger.bind(tag=TAG).info(f"[{self.session_id}] handle_llm_function_call responce : {result}")
                 # self._handle_function_result(result, function_call_data, text_index + 1)
                 response_message.append(result.result)
+                self.ly_append_tts_queue(result.result) # 将句子添加到队列中
 
         # 处理最后剩余的文本
-        full_text = "".join(response_message)
-        remaining_text = full_text[processed_chars:]
-        if remaining_text:
-            segment_text = get_string_no_punctuation_or_emoji(remaining_text)
-            if segment_text:
-                text_index += 1
-                self.recode_first_last_text(segment_text, text_index)
-                future = self.executor.submit(
-                    self.speak_and_play, segment_text, text_index
-                )
-                self.tts_queue.put((future, text_index))
+        full_text = "".join(response_message)       
 
         # 存储对话内容
         if len(response_message) > 0:
