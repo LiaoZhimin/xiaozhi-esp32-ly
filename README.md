@@ -186,25 +186,29 @@ Websocket接口地址: wss://2662r3426b.vicp.fun/xiaozhi/v1/
 
 #### 🚩 配置说明和推荐
 > [!Note]
-> 本项目默认的配置是`入门全免费`设置，如果想效果更优，推荐使用`流式配置`。
+> 本项目提供两种配置方案：
 > 
-> 本项目自`0.5.2`版本，已支持使用流式配置，相比`0.5`版本以前，响应速度提升约`2.5秒`
+> 1. `入门全免费`配置：适合个人家庭使用，所有组件均采用免费方案，无需额外付费。
+> 
+> 2. `流式配置`：适合演示、培训、超过2个并发等场景，采用流式处理技术，响应速度更快，体验更佳。
+> 
+> 自`0.5.2`版本起，项目支持流式配置，相比早期版本，响应速度提升约`2.5秒`，显著改善用户体验。
 
 | 模块名称 | 入门全免费设置 | 流式配置 |
 |:---:|:---:|:---:|
-| ASR(语音识别) | FunASR(本地) | 👍DoubaoStreamASR(火山流式语音识别) |
+| ASR(语音识别) | FunASR(本地) | 👍FunASRServer 或 👍DoubaoStreamASR |
 | LLM(大模型) | ChatGLMLLM(智谱glm-4-flash) | 👍DoubaoLLM(火山doubao-1-5-pro-32k-250115) |
 | VLLM(视觉大模型) | ChatGLMVLLM(智谱glm-4v-flash) | 👍QwenVLVLLM(千问qwen2.5-vl-3b-instructh) |
-| TTS(语音合成) | EdgeTTS(微软语音) | 👍HuoshanDoubleStreamTTS(火山双流式语音合成) |
-| Intent(意图识别) | function_call(函数调用) | ✅function_call(函数调用) |
-| Memory(记忆功能) | mem_local_short(本地短期记忆） | ✅mem_local_short（本地短期记忆） |
+| TTS(语音合成) | ✅LinkeraiTTS(灵犀流式) | 👍HuoshanDoubleStreamTTS(火山双流式语音合成) |
+| Intent(意图识别) | function_call(函数调用) | function_call(函数调用) |
+| Memory(记忆功能) | mem_local_short(本地短期记忆） | mem_local_short（本地短期记忆） |
 
 #### 🔧 测试工具
 本项目提供以下测试工具，帮助您验证系统和选择合适的模型：
 
 | 工具名称 | 位置 | 使用方法 | 功能说明 |
 |:---:|:---|:---:|:---:|
-| 音频交互测试工具 | main》xiaozhi-server》test/》est_page.html | 使用谷歌浏览器直接打开 | 测试音频播放和接收功能，验证Python端音频处理是否正常 |
+| 音频交互测试工具 | main》xiaozhi-server》test》test_page.html | 使用谷歌浏览器直接打开 | 测试音频播放和接收功能，验证Python端音频处理是否正常 |
 | 模型响应测试工具1 | main》xiaozhi-server》performance_tester.py | 执行 `python performance_tester.py` | 测试ASR(语音识别)、LLM(大模型)、TTS(语音合成)三个核心模块的响应速度 |
 | 模型响应测试工具2 | main》xiaozhi-server》performance_tester_vllm.py | 执行 `python performance_tester_vllm.py` | 测试VLLM(视觉模型)的响应速度 |
 
@@ -277,7 +281,7 @@ Websocket接口地址: wss://2662r3426b.vicp.fun/xiaozhi/v1/
 
 | 使用方式 | 支持平台 | 免费平台 |
 |:---:|:---:|:---:|
-| 接口调用 | EdgeTTS、火山引擎豆包TTS、腾讯云、阿里云TTS、CosyVoiceSiliconflow、TTS302AI、CozeCnTTS、GizwitsTTS、ACGNTTS、OpenAITTS | EdgeTTS、CosyVoiceSiliconflow(部分) |
+| 接口调用 | EdgeTTS、火山引擎豆包TTS、腾讯云、阿里云TTS、CosyVoiceSiliconflow、TTS302AI、CozeCnTTS、GizwitsTTS、ACGNTTS、OpenAITTS、灵犀流式TTS | 灵犀流式TTS、EdgeTTS、CosyVoiceSiliconflow(部分) |
 | 本地服务 | FishSpeech、GPT_SOVITS_V2、GPT_SOVITS_V3、MinimaxTTS | FishSpeech、GPT_SOVITS_V2、GPT_SOVITS_V3、MinimaxTTS |
 
 ---
